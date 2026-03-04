@@ -15,7 +15,6 @@
 #include "path.h"
 #include "file.h"
 #include "fcntl.h"
-#include "syscall.h"
 
 /**
  * This function is not a system call handler, but an auxiliary function
@@ -466,63 +465,85 @@ void sys_open(tf_t *tf)
   syscall_set_errno(tf, E_SUCC);
 }
 
-int sys_mkdir(void)
+void sys_mkdir(tf_t *tf)
 {
     char path[128];
-    struct inode *ip;
+    struct inode *ip, *dp;
+    char name[DIRSIZ];
+    unsigned int path_len;
+    static int first = TRUE;
+    if (first) {
+        first = FALSE;
+        log_init();
+    }
 
     // Copy path from user
-    if (argstr(0, path, sizeof(path)) < 0)
-        return -1;
+    path_len = syscall_get_arg3(tf);
+    path_len = path_len < 128 ? path_len : 127;
+    pt_copyin(get_curid(), syscall_get_arg2(tf), path, path_len);
+    path[path_len] = '\0';
 
-    // Step 1: Allocate the inode in a small transaction
+    // Find parent directory
+    if ((dp = nameiparent(path, name)) == 0) {
+        syscall_set_errno(tf, E_NEXIST);
+        return;
+    }
+
     begin_trans();
-    ip = inode_alloc(ROOTDEV, T_DIR);   // Allocate a directory inode
-    if (ip == 0) {
-        commit_trans();
-        return -1;
-    }
-    inode_lock(ip);
-    ip->nlink = 1;       // For "."
-    inode_update(ip);    // Write inode metadata
-    inode_unlock(ip);
-    commit_trans();
-
-    // Step 2: Link into parent directory in a separate transaction
-    char name[DIRSIZ];
-    struct inode *dp = nameiparent(path, name); // Find parent
-    if (dp == 0) {
-        inode_put(ip);
-        return -1;
-    }
 
     inode_lock(dp);
 
-    // Step 2a: Increase parent nlink for ".."
+    // Allocate the directory inode
+    if ((ip = inode_alloc(dp->dev, T_DIR)) == 0) {
+        inode_unlockput(dp);
+        commit_trans();
+        syscall_set_errno(tf, E_DISK_OP);
+        return;
+    }
+
+    inode_lock(ip);
+    ip->nlink = 1;       // For "."
+    inode_update(ip);    // Write inode metadata
+
+    // Add "." entry
+    if (dir_link(ip, ".", ip->inum) < 0) {
+        inode_unlockput(ip);
+        inode_unlockput(dp);
+        commit_trans();
+        syscall_set_errno(tf, E_DISK_OP);
+        return;
+    }
+
+    // Add ".." entry
+    if (dir_link(ip, "..", dp->inum) < 0) {
+        inode_unlockput(ip);
+        inode_unlockput(dp);
+        commit_trans();
+        syscall_set_errno(tf, E_DISK_OP);
+        return;
+    }
+
+    inode_unlock(ip);
+
+    // Increase parent nlink for ".."
     dp->nlink++;
     inode_update(dp);
 
-    // Step 2b: Add "." and ".." entries to new dir
-    inode_lock(ip);
-    if (dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0) {
-        inode_unlockput(ip);
-        inode_unlockput(dp);
-        return -1;
-    }
-    inode_unlock(ip);
-
-    // Step 2c: Link new dir into parent
-    if (dirlink(dp, name, ip->inum) < 0) {
+    // Link new dir into parent
+    if (dir_link(dp, name, ip->inum) < 0) {
         inode_unlockput(dp);
         inode_put(ip);
-        return -1;
+        commit_trans();
+        syscall_set_errno(tf, E_DISK_OP);
+        return;
     }
 
     inode_unlockput(dp);
+    inode_put(ip);
 
-    // Final: leave inode locked for consistency, kernel can unlock later
-    syscall_set_errno(NULL, E_SUCC);
-    return 0;
+    commit_trans();
+
+    syscall_set_errno(tf, E_SUCC);
 }
 void sys_chdir(tf_t *tf)
 {
