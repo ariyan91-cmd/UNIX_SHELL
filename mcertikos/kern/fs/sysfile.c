@@ -15,6 +15,7 @@
 #include "path.h"
 #include "file.h"
 #include "fcntl.h"
+#include "syscall.h"
 
 /**
  * This function is not a system call handler, but an auxiliary function
@@ -354,14 +355,16 @@ bad:
 static struct inode*
 create(char *path, short type, short major, short minor)
 {
-  uint32_t off;
   struct inode *ip, *dp;
   char name[DIRSIZ];
+  uint32_t off;
 
   if((dp = nameiparent(path, name)) == 0)
     return 0;
+
   inode_lock(dp);
 
+  // FIXED: dir_lookup instead of dirlookup
   if((ip = dir_lookup(dp, name, &off)) != 0){
     inode_unlockput(dp);
     inode_lock(ip);
@@ -372,7 +375,7 @@ create(char *path, short type, short major, short minor)
   }
 
   if((ip = inode_alloc(dp->dev, type)) == 0)
-    KERN_PANIC("create: ialloc");
+    KERN_PANIC("create: inode_alloc");
 
   inode_lock(ip);
   ip->major = major;
@@ -380,20 +383,21 @@ create(char *path, short type, short major, short minor)
   ip->nlink = 1;
   inode_update(ip);
 
-  if(type == T_DIR){  // Create . and .. entries.
-    dp->nlink++;  // for ".."
+  if(type == T_DIR){
+    dp->nlink++;
     inode_update(dp);
-    // No ip->nlink++ for ".": avoid cyclic ref count.
-    if(   dir_link(ip, ".", ip->inum) < 0
-       || dir_link(ip, "..", dp->inum) < 0)
+
+    // FIXED: dir_link instead of dirlink
+    if(dir_link(ip, ".", ip->inum) < 0 ||
+       dir_link(ip, "..", dp->inum) < 0)
       KERN_PANIC("create dots");
   }
 
+  // FIXED: dir_link instead of dirlink
   if(dir_link(dp, name, ip->inum) < 0)
     KERN_PANIC("create: dir_link");
 
   inode_unlockput(dp);
-
   return ip;
 }
 
@@ -462,26 +466,64 @@ void sys_open(tf_t *tf)
   syscall_set_errno(tf, E_SUCC);
 }
 
-void sys_mkdir(tf_t *tf)
+int sys_mkdir(void)
 {
-  char path[128];
-  struct inode *ip;
-  unsigned int path_len = syscall_get_arg3(tf);
-  path_len = path_len < 128? path_len: 127;
-  pt_copyin(get_curid(), syscall_get_arg2(tf), path, path_len);
-  path[path_len] = '\0';
+    char path[128];
+    struct inode *ip;
 
-  begin_trans();
-  if((ip = (struct inode*)create(path, T_DIR, 0, 0)) == 0){
+    // Copy path from user
+    if (argstr(0, path, sizeof(path)) < 0)
+        return -1;
+
+    // Step 1: Allocate the inode in a small transaction
+    begin_trans();
+    ip = inode_alloc(ROOTDEV, T_DIR);   // Allocate a directory inode
+    if (ip == 0) {
+        commit_trans();
+        return -1;
+    }
+    inode_lock(ip);
+    ip->nlink = 1;       // For "."
+    inode_update(ip);    // Write inode metadata
+    inode_unlock(ip);
     commit_trans();
-    syscall_set_errno(tf, E_DISK_OP);
-    return;
-  }
-  inode_unlockput(ip);
-  commit_trans();
-  syscall_set_errno(tf, E_SUCC);
-}
 
+    // Step 2: Link into parent directory in a separate transaction
+    char name[DIRSIZ];
+    struct inode *dp = nameiparent(path, name); // Find parent
+    if (dp == 0) {
+        inode_put(ip);
+        return -1;
+    }
+
+    inode_lock(dp);
+
+    // Step 2a: Increase parent nlink for ".."
+    dp->nlink++;
+    inode_update(dp);
+
+    // Step 2b: Add "." and ".." entries to new dir
+    inode_lock(ip);
+    if (dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0) {
+        inode_unlockput(ip);
+        inode_unlockput(dp);
+        return -1;
+    }
+    inode_unlock(ip);
+
+    // Step 2c: Link new dir into parent
+    if (dirlink(dp, name, ip->inum) < 0) {
+        inode_unlockput(dp);
+        inode_put(ip);
+        return -1;
+    }
+
+    inode_unlockput(dp);
+
+    // Final: leave inode locked for consistency, kernel can unlock later
+    syscall_set_errno(NULL, E_SUCC);
+    return 0;
+}
 void sys_chdir(tf_t *tf)
 {
   char path[128];

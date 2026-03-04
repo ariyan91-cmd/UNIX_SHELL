@@ -371,8 +371,23 @@ inode_write(struct inode *ip, char *src, uint32_t off, uint32_t n)
     bufcache_release(bp);
   }
 
-  if(n > 0 && off > ip->size){
-    ip->size = off;
+  /* When writing bytes, the file size should grow to cover the
+   * last byte written.  The previous logic only updated the size
+   * when ``off`` (the starting offset) was greater than the old
+   * size, which is wrong for writes that begin at or before the
+   * current end of file.  For example, a write of 5 bytes at offset
+   * 0 would never increase the size because ``off`` == 0 and
+   * ``ip->size`` is initially 0.  The resulting inode size stayed
+   * zero, causing subsequent reads to return no data (the buffer
+   * cache still contained the bytes though).  This bug manifested
+   * in the userspace `cat` command appearing empty despite successful
+   * ``write()`` calls.
+   *
+   * The correct condition is to update the size if the highest byte
+   * written (off + n) exceeds the previous size.
+   */
+  if (n > 0 && off + n > ip->size) {
+    ip->size = off + n;
     inode_update(ip);
   }
   return n;

@@ -12,6 +12,7 @@
 #include "mboot.h"
 #include "intr.h"
 #include "tsc.h"
+#include "../fs/log.h"
 
 #include <kern/lib/buf.h>
 #include <kern/dev/disk/ide.h>
@@ -55,7 +56,7 @@ devinit (uintptr_t mbi_addr)
 	inode_init();         // inode cache
 	ide_init ();
 	KERN_INFO("[BSP KERN] IDE disk driver initialized\n");
-	// Note: log_init() is called lazily in sys_open when first file is opened
+	/* Note: log_init() is called lazily when first file is opened */
         ipc_init();
 	KERN_INFO("[BSP KERN] IPC initialized\n");
 }

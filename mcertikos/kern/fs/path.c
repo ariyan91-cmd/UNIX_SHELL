@@ -71,7 +71,21 @@ namex(char *path, bool nameiparent, char *name)
     ip = inode_get(ROOTDEV, ROOTINO);
   }
   else {
-    ip = inode_dup((struct inode*) tcb_get_cwd(get_curid()));
+    /* Relative path: base lookup at current working directory.
+     * The kernel may not have initialized cwd for the process yet
+     * (new processes start with cwd == NULL).  Several system calls
+     * (notably sys_open when creating a file) perform pathname
+     * lookup via namex/nameiparent, which would call inode_dup on a
+     * NULL pointer and later panic in inode_lock.  To avoid that, we
+     * lazily initialise cwd to the root inode here, mirroring the
+     * behaviour we already have in sys_ls/sys_pwd.
+     */
+    struct inode *cwd = (struct inode*) tcb_get_cwd(get_curid());
+    if (cwd == NULL) {
+      cwd = inode_get(ROOTDEV, ROOTINO);
+      tcb_set_cwd(get_curid(), cwd);
+    }
+    ip = inode_dup(cwd);
   }
 
   while((path = skipelem(path, name)) != 0){

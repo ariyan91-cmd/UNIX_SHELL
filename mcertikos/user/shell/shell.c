@@ -1,4 +1,4 @@
-#include <proc.h>
+   #include <proc.h>
 #include <stdio.h>
 #include <syscall.h>
 #include <x86.h>
@@ -90,7 +90,7 @@ static struct Command commands[] =
 	{"mv", "mv <src_path> <dest_path> \n\t move file or directory",shell_mv},
 	{"rm", "rm <-r> <filename> \n\t remove file or directory",shell_rm},
 	{"mkdir", "mkdir <dirname> \n\t create directory",shell_mkdir},
-	{"cat", "cat <filename> \n\t print file content",shell_cat},
+  {"cat", "cat [-n|-b] <file>... [> outfile]  \n\tprint and concatenate files, support line numbers and redirection",shell_cat},
 	{"touch", "touch <filename> \n\t create new empty file", shell_touch},
         {"write", "write <string> <filename> \n\t write a string to file", shell_write},
         {"append", "append <string> <filename> \n\t append a string to file", shell_append},
@@ -430,72 +430,179 @@ int is_file_exist(char* path){
 }
 int shell_mkdir(int argc, char** argv)
 {
-	int i;
-	if (argc == 1)
-		printf ("mkdir failed, no path\n");
+    if (argc < 2) {
+        printf("mkdir: missing operand\n");
+        return 0;
+    }
 
-	for (i = 1; i < argc; i++){
-		if (sys_mkdir(argv[i]) == 0)
-		;	//printf("make dir succeed.\n");
-		else
-			printf("make dir failed.\n");
-	}
+    for (int i = 1; i < argc; i++) {
+        int ret = sys_mkdir(argv[i]);
+        if (ret != 0) {
+            printf("mkdir: cannot create directory '%s'\n", argv[i]);
+        }
+    }
 
-	return 0;
+    return 0;
 }
+
+/*
+ * Enhanced `cat` implementation. Supports concatenating multiple files,
+ * redirection (``>`` and ``>>``), and line numbering flags ``-n`` and
+ * ``-b`` (number non-empty lines).
+ */
+
+static int _shell_cat_file(const char *path, int outfd,
+               int show_nums, int num_nonblank, int *lineno);
 
 int shell_cat(int argc, char** argv)
 {
- 	if (argc == 1) {
-		printf("touch failed. No Path. \n");
-		return;
-	}
-	int i;
-	for (i = 1; i < argc; i++)
-	{
-                if(_shell_cat(argv[i]) == -1){
-                      printf("Path is invalid. \n");
-                }
-	}
+  if (argc == 1) {
+    printf("cat: missing operand\n");
+    return 0;
+  }
 
-	return 0;
+  /* options */
+  int show_numbers = 0;
+  int number_nonblank = 0;
+  int idx = 1;
+
+  while (idx < argc && argv[idx][0] == '-' && argv[idx][1] != '\0') {
+    if (strcmp(argv[idx], "-n") == 0) {
+      show_numbers = 1;
+    } else if (strcmp(argv[idx], "-b") == 0) {
+      number_nonblank = 1;
+    } else {
+      break;
+    }
+    idx++;
+  }
+
+  int outfd = 1;           /* default to stdout */
+  int append = 0;
+  int files_end = argc;
+
+  for (int j = idx; j < argc; j++) {
+    if (strcmp(argv[j], ">") == 0 || strcmp(argv[j], ">>") == 0) {
+      if (j + 1 >= argc) {
+        printf("cat: missing file operand after '%s'\n", argv[j]);
+        return 0;
+      }
+      append = (strcmp(argv[j], ">>") == 0);
+      const char *outname = argv[j+1];
+
+      if (!append) {
+        unlink((char *)outname);
+      }
+
+      outfd = open(outname, O_CREATE | O_RDWR);
+      if (outfd < 0) {
+        printf("cat: cannot open output file %s\n", outname);
+        return 0;
+      }
+
+      if (append) {
+        char tmp[BUFLEN];
+        while (read(outfd, tmp, BUFLEN) > 0) {
+          ;
+        }
+      }
+
+      files_end = j;
+      break;
+    }
+  }
+
+  if (idx >= files_end) {
+    if (outfd != 1)
+      close(outfd);
+    return 0;
+  }
+
+  int lineno = 1;
+  for (int j = idx; j < files_end; j++) {
+    if (_shell_cat_file(argv[j], outfd, show_numbers, number_nonblank,
+              &lineno) == -1) {
+      printf("cat: %s: No such file or directory\n", argv[j]);
+    }
+  }
+
+  if (outfd != 1)
+    close(outfd);
+
+  return 0;
 }
-int _shell_cat(char * path){
-   int fd, size_read;
-   char buf[100];
-   fd = open(path, O_RDONLY);
-   if(fd == -1){
-        // file does not exist
-        return -1;
-   }
-   size_read = read(fd, buf, sizeof(buf) - 1);
-   buf[size_read] = '\0';
-   printf("%s\n", buf);
-   close(fd);
-   return 0; // success
+
+static int _shell_cat_file(const char *path, int outfd,
+               int show_nums, int num_nonblank, int *lineno)
+{
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return -1;
+
+  char buf[BUFLEN];
+  char line[BUFLEN];
+  int nread;
+  int pos = 0;
+
+  while ((nread = read(fd, buf, sizeof(buf))) > 0) {
+    for (int i = 0; i < nread; i++) {
+      char c = buf[i];
+      if (c == '\n' || pos == BUFLEN - 1) {
+        if (pos < BUFLEN - 1)
+          line[pos++] = c;
+        line[pos] = '\0';
+
+        int is_blank = (pos == 1 && line[0] == '\n');
+        if (show_nums || (num_nonblank && !is_blank)) {
+          char numbuf[32];
+          int len = sprintf(numbuf, "%6d  ", *lineno);
+          write(outfd, numbuf, len);
+          (*lineno)++;
+        }
+        write(outfd, line, pos);
+        pos = 0;
+      } else {
+        line[pos++] = c;
+      }
+    }
+  }
+
+  if (pos > 0) {
+    line[pos] = '\0';
+    int is_blank = (pos == 1 && line[0] == '\n');
+    if (show_nums || (num_nonblank && !is_blank)) {
+      char numbuf[32];
+      int len = sprintf(numbuf, "%6d  ", *lineno);
+      write(outfd, numbuf, len);
+      (*lineno)++;
+    }
+    write(outfd, line, pos);
+  }
+
+  close(fd);
+  return 0;
 }
 
 int shell_touch(int argc, char** argv)
 {
-	if (argc == 1) {
-		printf("touch failed. No Path. \n");
-		return;
-	}
-	int i;
-	for (i = 1; i < argc; i++)
-	{
-                int fd;
-                fd = open(argv[i], O_RDONLY);
-		if(fd >= 0){
-    			printf("%s file exist\n", argv[i]);
-                        close(fd);
-			continue;
-  		} else {
-			close(open(argv[i], O_CREATE));
-			//printf("%s file create\n", argv[i]);
-		}
-	}
-	return 0;
+    if (argc == 1) {
+        printf ("touch failed. No Path. \n");
+        return 0;
+    }
+    int i;
+    for (i = 1; i < argc; i++)
+    {
+        int fd;
+        fd = open(argv[i], O_RDONLY);
+        if(fd >= 0){
+            printf("%s file exist\n", argv[i]);
+            close(fd);
+            continue;
+        } else {
+            close(open(argv[i], O_CREATE));
+        }
+    }
+    return 0;
 }
 
 int shell_write(int argc, char** argv) {
