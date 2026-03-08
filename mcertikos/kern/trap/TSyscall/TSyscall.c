@@ -229,27 +229,6 @@ void sys_is_dir(tf_t * tf){
   syscall_set_errno(tf, E_SUCC);
   syscall_set_retval1(tf, isDir);
 }
-void sys_produce(tf_t *tf)
-{
-  unsigned int i;
-  for(i = 0; i < 5; i++) {
-    intr_local_disable();
-    KERN_DEBUG("CPU %d: Process %d: Produced %d\n", get_pcpu_idx(), get_curid(), i);
-    intr_local_enable();
-  }
-  syscall_set_errno(tf, E_SUCC);
-}
-
-void sys_consume(tf_t *tf)
-{
-  unsigned int i;
-  for(i = 0; i < 5; i++) {
-    intr_local_disable();
-    KERN_DEBUG("CPU %d: Process %d: Consumed %d\n", get_pcpu_idx(), get_curid(), i);
-    intr_local_enable();
-  }
-  syscall_set_errno(tf, E_SUCC);
-}
 void sys_ls(tf_t *tf)
 {
   uint32_t off, inum;
@@ -374,20 +353,6 @@ void sys_cp(tf_t *tf)
 {
 }
 
-void sys_readline(tf_t *tf)
-{
-  char* kernbuf = (char*)readline(">:");
-  char* userbuf = (char*)syscall_get_arg2(tf);
-  int n_len = strnlen(kernbuf, 1000) + 1;
-
-  if (pt_copyout((void*)kernbuf, get_curid(), userbuf, n_len) != n_len) {
-    KERN_PANIC("Readline fails!\n");
-    syscall_set_errno(tf, E_MEM);
-    syscall_set_retval1(tf, -1);
-  }
-  syscall_set_errno(tf, E_SUCC);
-  syscall_set_retval1(tf, 0);
-}
 void sys_touch(tf_t *tf)
 {
 }

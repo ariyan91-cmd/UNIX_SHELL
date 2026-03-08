@@ -571,3 +571,75 @@ void sys_chdir(tf_t *tf)
   syscall_set_errno(tf, E_SUCC);
 }
 
+void sys_pipe(tf_t *tf)
+{
+  int *pfd = (int*)syscall_get_arg2(tf);
+  struct file *rf, *wf;
+  struct pipe *p;
+  int fd0, fd1;
+  unsigned int pid = get_curid();
+  
+  p = pipe_alloc();
+  if(p == 0){
+    syscall_set_errno(tf, E_NO_MEM);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  rf = file_alloc();
+  if(rf == 0){
+    syscall_set_errno(tf, E_NO_MEM);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  wf = file_alloc();
+  if(wf == 0){
+    file_close(rf);
+    syscall_set_errno(tf, E_NO_MEM);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  fd0 = fdalloc(rf);
+  if(fd0 < 0){
+    file_close(rf);
+    file_close(wf);
+    syscall_set_errno(tf, E_NO_FD);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  fd1 = fdalloc(wf);
+  if(fd1 < 0){
+    file_close(rf);
+    file_close(wf);
+    syscall_set_errno(tf, E_NO_FD);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  rf->type = FD_PIPE;
+  rf->readable = 1;
+  rf->writable = 0;
+  rf->pipe = p;
+  rf->ref = 1;
+  
+  wf->type = FD_PIPE;
+  wf->readable = 0;
+  wf->writable = 1;
+  wf->pipe = p;
+  wf->ref = 1;
+  
+  // Copy fd0 and fd1 to user space
+  int fds[2];
+  fds[0] = fd0;
+  fds[1] = fd1;
+  
+  pt_copyout(fds, pid, (uintptr_t)pfd, sizeof(fds));
+  
+  syscall_set_errno(tf, E_SUCC);
+  syscall_set_retval1(tf, 0);
+}
+
+

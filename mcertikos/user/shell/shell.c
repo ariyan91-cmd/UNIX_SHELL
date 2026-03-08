@@ -28,6 +28,26 @@
 #define WHITESPACE "\t\r\n "
 #define MAXARGS 16
 
+#ifndef EOF
+#define EOF (-1)
+#endif
+
+// Simple getchar implementation for reading from stdin
+static int getchar(void) {
+  unsigned char c;
+  if (read(0, &c, 1) <= 0)
+    return EOF;
+  return c;
+}
+
+// Simple getchar implementation for reading from stdin
+static int getchar(void) {
+  unsigned char c;
+  if (read(0, &c, 1) <= 0)
+    return EOF;
+  return c;
+}
+
 /* Forward declarations */
 void signal_handler(int signum);
 
@@ -90,7 +110,7 @@ static struct Command commands[] =
 	{"mv", "mv <src_path> <dest_path> \n\t move file or directory",shell_mv},
 	{"rm", "rm <-r> <filename> \n\t remove file or directory",shell_rm},
 	{"mkdir", "mkdir <dirname> \n\t create directory",shell_mkdir},
-  {"cat", "cat [-n|-b] <file>... [> outfile]  \n\tprint and concatenate files, support line numbers and redirection",shell_cat},
+  {"cat", "cat [-n|-b] <file>... [<inputfile] [> outfile | >> outfile]  \n\tprint and concatenate files, support line numbers and redirection",shell_cat},
 	{"touch", "touch <filename> \n\t create new empty file", shell_touch},
         {"write", "write <string> <filename> \n\t write a string to file", shell_write},
         {"append", "append <string> <filename> \n\t append a string to file", shell_append},
@@ -722,7 +742,59 @@ int cp_file(char* dest_filename, char* src_filename) {
 
 
 void shell_readline(char* buf) {
-  sys_readline(buf);
+  int i = 0;
+  int max_len = 1024;
+  char c;
+  printf(">");
+  while (i < max_len - 1) {
+    c = getchar();
+    if (c == '\n') {
+      buf[i] = '\0';
+      break;
+    }
+    buf[i++] = c;
+  }
+  buf[i] = '\0';
+}
+
+// Parse redirections and pipes from command line
+static int parse_cmd_redirections(char *argv[], int argc, 
+                                  char **infile, char **outfile, int *append) {
+  int final_argc = 0;
+  *infile = NULL;
+  *outfile = NULL;
+  *append = 0;
+  
+  for (int i = 0; i < argc; i++) {
+    if (strcmp(argv[i], "<") == 0) {
+      if (i + 1 < argc) {
+        *infile = argv[i + 1];
+        i++;
+        continue;
+      }
+    } else if (strcmp(argv[i], ">") == 0) {
+      if (i + 1 < argc) {
+        *outfile = argv[i + 1];
+        *append = 0;
+        i++;
+        continue;
+      }
+    } else if (strcmp(argv[i], ">>") == 0) {
+      if (i + 1 < argc) {
+        *outfile = argv[i + 1];
+        *append = 1;
+        i++;
+        continue;
+      }
+    } else {
+      if (final_argc < MAXARGS - 1) {
+        argv[final_argc++] = argv[i];
+      }
+    }
+  }
+  
+  argv[final_argc] = 0;
+  return final_argc;
 }
 
 static int
@@ -730,11 +802,14 @@ runcmd (char *buf)
 {
 	int argc;
 	char *argv[MAXARGS];
+	char *infile = NULL, *outfile = NULL;
+	int append = 0;
 	int i;
 
 	argc = 0;
 	argv[argc] = 0;
 
+	// Parse command line - stop at redirections/pipes
 	while(1)
 	{
 		while (*buf && strchr(WHITESPACE, *buf))
@@ -747,6 +822,7 @@ runcmd (char *buf)
 			printf("Too many arguments (max %d)\n", MAXARGS);
 			return 0;
 		}
+		
 		argv[argc++] = buf;
 		while (*buf && !strchr(WHITESPACE, *buf))
 			buf++;
@@ -754,6 +830,11 @@ runcmd (char *buf)
 	argv[argc] = 0;
 	if (argc == 0)
 		return 0;
+	
+	// Parse redirections
+	argc = parse_cmd_redirections(argv, argc, &infile, &outfile, &append);
+	
+	// Look up and execute command
 	for (i = 0; i < NCOMMANDS; i++)
 	{
 		if (strcmp(argv[0], commands[i].name) == 0)

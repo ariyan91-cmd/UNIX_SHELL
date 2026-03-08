@@ -77,24 +77,6 @@ sys_yield(void)
 		     : "cc", "memory");
 }
 
-static gcc_inline void
-sys_produce(void)
-{
-	asm volatile("int %0" :
-		     : "i" (T_SYSCALL),
-		       "a" (SYS_produce)
-		     : "cc", "memory");
-}
-
-static gcc_inline void
-sys_consume(void)
-{
-	asm volatile("int %0" :
-		     : "i" (T_SYSCALL),
-		       "a" (SYS_consume)
-		     : "cc", "memory");
-}
-
 static gcc_inline int
 sys_read(int fd, char *buf, size_t n)
 {
@@ -277,19 +259,6 @@ sys_chdir(char *path)
 
 	return errno ? -1 : 0;
 }
- static gcc_inline int
-sys_readline(char* start)
-{
-	int errno, ret;
-	asm volatile("int %2"
-		     : "=a" (errno),
-		       "=b" (ret)
-		     : "i" (T_SYSCALL),
-		       "a" (SYS_readline),
-		       "b" (start)
-		     : "cc", "memory");
-	return errno ? -1: 0;
-}
 
 static gcc_inline int
 sys_ls(char * buf, int buf_len)
@@ -451,5 +420,17 @@ sys_pause(void)
 	return errno ? -1 : 0;
 }
 
+static gcc_inline int
+sys_pipe(int *pfd)
+{
+	int errno;
+	asm volatile ("int %2"
+		      : "=a" (errno)
+		      : "i" (T_SYSCALL),
+		        "a" (SYS_pipe),
+		        "b" (pfd)
+		      : "cc", "memory");
+	return errno ? -1 : 0;
+}
 
 #endif

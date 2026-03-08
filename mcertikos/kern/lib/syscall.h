@@ -36,9 +36,6 @@ enum __syscall_nr {
 
   SYS_yield,	/* yield to another process */
 
-  SYS_produce,
-  SYS_consume,
-
   SYS_open,
   SYS_close,
   SYS_read,
@@ -59,11 +56,11 @@ enum __syscall_nr {
   SYS_cp,
   SYS_cat,
   SYS_touch,
-  SYS_readline,
   SYS_sigaction,    /* register signal handler */
   SYS_kill,         /* send signal to process */
   SYS_pause,        /* wait for signal */
   SYS_sigreturn,    /* return from signal handler */
+  SYS_pipe,         /* create a pipe */
 
   MAX_SYSCALL_NR	/* XXX: always put it at the end of __syscall_nr */
 };
