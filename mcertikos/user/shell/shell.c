@@ -40,14 +40,6 @@ static int getchar(void) {
   return c;
 }
 
-// Simple getchar implementation for reading from stdin
-static int getchar(void) {
-  unsigned char c;
-  if (read(0, &c, 1) <= 0)
-    return EOF;
-  return c;
-}
-
 /* Forward declarations */
 void signal_handler(int signum);
 

@@ -10,6 +10,8 @@
 #include <kern/lib/syscall.h>
 #include <kern/trap/TSyscallArg/export.h>
 #include <kern/lib/spinlock.h>
+#include <kern/lib/pmap.h>
+#include "log.h"
 
 #include "dir.h"
 #include "path.h"
@@ -81,7 +83,7 @@ void sys_read(tf_t *tf)
     return ;
   }
   fp = tcb_get_openfiles(pid)[fd];
-  if(fp == 0 || fp->ip == 0){
+  if(fp == 0 || fp->type == FD_NONE){
     KERN_INFO("fp illegal\n");
     syscall_set_retval1(tf, -1);
     syscall_set_errno(tf, E_BADF);
@@ -132,7 +134,7 @@ void sys_write(tf_t *tf)
     return ;
   }
   fp = tcb_get_openfiles(pid)[fd];
-  if(fp == 0 || fp->ip == 0){
+  if(fp == 0){
     syscall_set_retval1(tf, -1);
     syscall_set_errno(tf, E_BADF);
     spinlock_release(&buf_lock);
@@ -581,14 +583,14 @@ void sys_pipe(tf_t *tf)
   
   p = pipe_alloc();
   if(p == 0){
-    syscall_set_errno(tf, E_NO_MEM);
+    syscall_set_errno(tf, E_MEM);
     syscall_set_retval1(tf, -1);
     return;
   }
   
   rf = file_alloc();
   if(rf == 0){
-    syscall_set_errno(tf, E_NO_MEM);
+    syscall_set_errno(tf, E_MEM);
     syscall_set_retval1(tf, -1);
     return;
   }
@@ -596,7 +598,7 @@ void sys_pipe(tf_t *tf)
   wf = file_alloc();
   if(wf == 0){
     file_close(rf);
-    syscall_set_errno(tf, E_NO_MEM);
+    syscall_set_errno(tf, E_MEM);
     syscall_set_retval1(tf, -1);
     return;
   }
@@ -605,7 +607,7 @@ void sys_pipe(tf_t *tf)
   if(fd0 < 0){
     file_close(rf);
     file_close(wf);
-    syscall_set_errno(tf, E_NO_FD);
+    syscall_set_errno(tf, E_BADF);
     syscall_set_retval1(tf, -1);
     return;
   }
@@ -614,7 +616,7 @@ void sys_pipe(tf_t *tf)
   if(fd1 < 0){
     file_close(rf);
     file_close(wf);
-    syscall_set_errno(tf, E_NO_FD);
+    syscall_set_errno(tf, E_BADF);
     syscall_set_retval1(tf, -1);
     return;
   }
