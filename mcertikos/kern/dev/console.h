@@ -7,6 +7,7 @@
 
 void cons_init(void);
 void cons_enable_kbd(void);
+char cons_getc(void);
 void cons_putc(char);
 void cons_intr(int (*proc)(void));
 

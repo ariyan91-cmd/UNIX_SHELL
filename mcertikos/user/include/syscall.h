@@ -51,7 +51,7 @@ sys_sync_receive(int send_pid, char* addr, size_t len)
 }
 static gcc_inline pid_t
 
-sys_spawn(uintptr_t exec, unsigned int quota)
+sys_spawn_io(uintptr_t exec, unsigned int quota, int infd, int outfd)
 {
 	int errno;
 	pid_t pid;
@@ -62,10 +62,18 @@ sys_spawn(uintptr_t exec, unsigned int quota)
 		     : "i" (T_SYSCALL),
 		       "a" (SYS_spawn),
 		       "b" (exec),
-		       "c" (quota)
+		       "c" (quota),
+		       "d" (infd),
+		       "S" (outfd)
 		     : "cc", "memory");
 
 	return errno ? -1 : pid;
+}
+
+static gcc_inline pid_t
+sys_spawn(uintptr_t exec, unsigned int quota)
+{
+	return sys_spawn_io(exec, quota, 0, 1);
 }
 
 static gcc_inline void
@@ -74,24 +82,6 @@ sys_yield(void)
 	asm volatile("int %0" :
 		     : "i" (T_SYSCALL),
 		       "a" (SYS_yield)
-		     : "cc", "memory");
-}
-
-static gcc_inline void
-sys_produce(void)
-{
-	asm volatile("int %0" :
-		     : "i" (T_SYSCALL),
-		       "a" (SYS_produce)
-		     : "cc", "memory");
-}
-
-static gcc_inline void
-sys_consume(void)
-{
-	asm volatile("int %0" :
-		     : "i" (T_SYSCALL),
-		       "a" (SYS_consume)
 		     : "cc", "memory");
 }
 
@@ -277,19 +267,6 @@ sys_chdir(char *path)
 
 	return errno ? -1 : 0;
 }
- static gcc_inline int
-sys_readline(char* start)
-{
-	int errno, ret;
-	asm volatile("int %2"
-		     : "=a" (errno),
-		       "=b" (ret)
-		     : "i" (T_SYSCALL),
-		       "a" (SYS_readline),
-		       "b" (start)
-		     : "cc", "memory");
-	return errno ? -1: 0;
-}
 
 static gcc_inline int
 sys_ls(char * buf, int buf_len)
@@ -451,5 +428,17 @@ sys_pause(void)
 	return errno ? -1 : 0;
 }
 
+static gcc_inline int
+sys_pipe(int *pfd)
+{
+	int errno;
+	asm volatile ("int %1"
+		      : "=a" (errno)
+		      : "i" (T_SYSCALL),
+		        "a" (SYS_pipe),
+		        "b" (pfd)
+		      : "cc", "memory");
+	return errno ? -1 : 0;
+}
 
 #endif

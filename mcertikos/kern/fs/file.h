@@ -12,6 +12,7 @@
 
 #include "stat.h"
 #include "inode.h"
+#include "pipe.h"
 
 struct file {
   enum { FD_NONE, FD_PIPE, FD_INODE } type;
@@ -19,6 +20,7 @@ struct file {
   int8_t readable;
   int8_t writable;
   struct inode *ip;
+  struct pipe *pipe;
   uint32_t off;
 };
 

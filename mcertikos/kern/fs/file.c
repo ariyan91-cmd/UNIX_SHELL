@@ -9,6 +9,7 @@
 #include "stat.h"
 #include "dinode.h"
 #include "inode.h"
+#include "pipe.h"
 #include "file.h"
 
 struct {
@@ -20,6 +21,7 @@ void
 file_init(void)
 {
   spinlock_init(&ftable.lock);
+  pipe_init();
 }
 
 /**
@@ -80,6 +82,11 @@ file_close(struct file *f)
     begin_trans();
     inode_put(ff.ip);
     commit_trans();
+  } else if(ff.type == FD_PIPE){
+    if(ff.readable)
+      pipe_close_read(ff.pipe);
+    if(ff.writable)
+      pipe_close_write(ff.pipe);
   }
 }
 
@@ -114,6 +121,8 @@ file_read(struct file *f, char *addr, int n)
       f->off += r;
     inode_unlock(f->ip);
     return r;
+  } else if(f->type == FD_PIPE){
+    return pipe_read(f->pipe, addr, n);
   }
   KERN_PANIC("file_read");
 }
@@ -156,6 +165,8 @@ file_write(struct file *f, char *addr, int n)
       i += r;
     }
     return i == n ? n : -1;
+  } else if(f->type == FD_PIPE){
+    return pipe_write(f->pipe, addr, n);
   }
   KERN_PANIC("file_write");
 }

@@ -44,9 +44,6 @@ void syscall_dispatch(tf_t *tf)
     break;
   case SYS_touch:
     sys_touch(tf);
-  case SYS_readline:
-    sys_readline(tf);
-    break;
   case SYS_puts:
     /*
      * Output a string to the screen.
@@ -93,16 +90,6 @@ void syscall_dispatch(tf_t *tf)
      */
     sys_yield(tf);
     break;
-  case SYS_produce:
-    intr_local_enable();
-    sys_produce(tf);
-    intr_local_disable();
-    break;
-  case SYS_consume:
-    intr_local_enable();
-    sys_consume(tf);
-    intr_local_disable();
-    break;
 
   /** Filesystem calls **/
   case SYS_open:
@@ -145,6 +132,9 @@ void syscall_dispatch(tf_t *tf)
     break;
   case SYS_sigreturn:
     sys_sigreturn(tf);
+    break;
+  case SYS_pipe:
+    sys_pipe(tf);
     break;
 
   default:

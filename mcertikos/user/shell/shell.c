@@ -28,6 +28,18 @@
 #define WHITESPACE "\t\r\n "
 #define MAXARGS 16
 
+#ifndef EOF
+#define EOF (-1)
+#endif
+
+// Simple getchar implementation for reading from stdin
+static int getchar(void) {
+  unsigned char c;
+  if (read(0, &c, 1) <= 0)
+    return EOF;
+  return c;
+}
+
 /* Forward declarations */
 void signal_handler(int signum);
 
@@ -54,8 +66,10 @@ int shell_mkdir(int argc, char **argv);
 int shell_cat(int argc, char **argv);
 int shell_touch(int argc, char **argv);
 int shell_help(int argc, char **argv);
+int shell_echo(int argc, char **argv);
 int shell_write(int argc, char **argv);
 int shell_append(int argc, char **argv);
+int shell_rot13(int argc, char **argv);
 int shell_kill(int argc, char **argv);
 int shell_trap(int argc, char **argv);
 int shell_spawn(int argc, char **argv);
@@ -70,6 +84,9 @@ int _shell_cat(char * path);
 int _shell_cp(char * dest_path, char * src_path, int isRecursive);
 int extract_filename(char * path, char * filename);
 int cp_file(char * dest_filename, char * src_filename);
+int shell_cat_fd(int argc, char **argv, int infd, int outfd);
+int shell_rot13_fd(int argc, char **argv, int infd, int outfd);
+int shell_echo_fd(int argc, char **argv, int outfd);
 
 char shell_buf[BUFLEN];
 
@@ -90,10 +107,12 @@ static struct Command commands[] =
 	{"mv", "mv <src_path> <dest_path> \n\t move file or directory",shell_mv},
 	{"rm", "rm <-r> <filename> \n\t remove file or directory",shell_rm},
 	{"mkdir", "mkdir <dirname> \n\t create directory",shell_mkdir},
-  {"cat", "cat [-n|-b] <file>... [> outfile]  \n\tprint and concatenate files, support line numbers and redirection",shell_cat},
+  {"cat", "cat [-n|-b] <file>... [<inputfile] [> outfile | >> outfile]  \n\tprint and concatenate files, support line numbers and redirection",shell_cat},
 	{"touch", "touch <filename> \n\t create new empty file", shell_touch},
         {"write", "write <string> <filename> \n\t write a string to file", shell_write},
         {"append", "append <string> <filename> \n\t append a string to file", shell_append},
+        {"echo", "echo <text> [> file | >> file]  \n\t print text", shell_echo},
+        {"rot13", "rot13 [file ...]  \n\tapply rot13 to files or stdin", shell_rot13},
         {"help", "help \n\t print this help message", shell_help},
         {"kill", "kill <signal> <pid> \n\t send signal to process", shell_kill},
         {"trap", "trap <signum> <handler> \n\t register signal handler", shell_trap},
@@ -132,7 +151,10 @@ int shell_ls(int argc, char** argv)
 
 int shell_pwd(int argc, char ** argv)
 {
-
+	if (argc != 1) {
+		printf("pwd: too many arguments\n");
+		return 0;
+	}
 	sys_pwd(shell_buf);
         printf("%s\n",shell_buf);
 	return 0;
@@ -142,15 +164,16 @@ int shell_cd(int argc, char** argv)
 {
 	char path[1024];
 	if (argc == 1){
-		strcpy(path, '\0');
-		sys_chdir(path);
+		strcpy(path, "/");
+		if (sys_chdir(path) < 0)
+			printf("cd: cannot change directory\n");
 	}
 	else {
 		strcpy(path, argv[1]);
-	//	printf("%s\n",path);
-		sys_chdir(path);
+		if (sys_chdir(path) < 0)
+			printf("cd: %s: No such directory\n", argv[1]);
 	}
-
+	return 0;
 }
 int shell_cp(int argc, char** argv)
 {
@@ -299,10 +322,8 @@ int shell_mv(int argc, char** argv)
 
 int shell_rm(int argc, char** argv)
 {
-        int fd, isRecursive;
+        int isRecursive;
         int pathIdx;
-        char * path;
-        // TODO support rm
       	if (argc == 1) {
         	printf("Too few arguments.\n");
 		return 0;
@@ -314,16 +335,18 @@ int shell_rm(int argc, char** argv)
                 isRecursive = 0;
                 pathIdx = 1;
         }
-        if(pathIdx > argc + 1){
+        if(pathIdx >= argc){
                 printf("rm: no path argument.\n");
                 return 0;
         }
-        path = argv[pathIdx];
-        if(!is_file_exist(path)){
+        for (; pathIdx < argc; pathIdx++) {
+          char * path = argv[pathIdx];
+          if(!is_file_exist(path)){
             printf("rm: can not remove %s: is not a file or directory.\n", path);
-            return 0;
+            continue;
+          }
+          _shell_rm(path, isRecursive);
         }
-        _shell_rm(path, isRecursive);
         return 0;
 }
 // path is guaranteed to be exist
@@ -453,14 +476,17 @@ int shell_mkdir(int argc, char** argv)
 
 static int _shell_cat_file(const char *path, int outfd,
                int show_nums, int num_nonblank, int *lineno);
+static int _shell_cat_stream(int fd, int outfd,
+               int show_nums, int num_nonblank, int *lineno);
+static int write_line_number(int outfd, int n);
 
 int shell_cat(int argc, char** argv)
 {
-  if (argc == 1) {
-    printf("cat: missing operand\n");
-    return 0;
-  }
+  return shell_cat_fd(argc, argv, 0, 1);
+}
 
+int shell_cat_fd(int argc, char** argv, int infd, int outfd)
+{
   /* options */
   int show_numbers = 0;
   int number_nonblank = 0;
@@ -477,58 +503,18 @@ int shell_cat(int argc, char** argv)
     idx++;
   }
 
-  int outfd = 1;           /* default to stdout */
-  int append = 0;
-  int files_end = argc;
-
-  for (int j = idx; j < argc; j++) {
-    if (strcmp(argv[j], ">") == 0 || strcmp(argv[j], ">>") == 0) {
-      if (j + 1 >= argc) {
-        printf("cat: missing file operand after '%s'\n", argv[j]);
-        return 0;
-      }
-      append = (strcmp(argv[j], ">>") == 0);
-      const char *outname = argv[j+1];
-
-      if (!append) {
-        unlink((char *)outname);
-      }
-
-      outfd = open(outname, O_CREATE | O_RDWR);
-      if (outfd < 0) {
-        printf("cat: cannot open output file %s\n", outname);
-        return 0;
-      }
-
-      if (append) {
-        char tmp[BUFLEN];
-        while (read(outfd, tmp, BUFLEN) > 0) {
-          ;
-        }
-      }
-
-      files_end = j;
-      break;
-    }
-  }
-
-  if (idx >= files_end) {
-    if (outfd != 1)
-      close(outfd);
+  int lineno = 1;
+  if (idx >= argc) {
+    _shell_cat_stream(infd, outfd, show_numbers, number_nonblank, &lineno);
     return 0;
   }
 
-  int lineno = 1;
-  for (int j = idx; j < files_end; j++) {
+  for (int j = idx; j < argc; j++) {
     if (_shell_cat_file(argv[j], outfd, show_numbers, number_nonblank,
               &lineno) == -1) {
       printf("cat: %s: No such file or directory\n", argv[j]);
     }
   }
-
-  if (outfd != 1)
-    close(outfd);
-
   return 0;
 }
 
@@ -538,7 +524,14 @@ static int _shell_cat_file(const char *path, int outfd,
   int fd = open(path, O_RDONLY);
   if (fd < 0)
     return -1;
+  _shell_cat_stream(fd, outfd, show_nums, num_nonblank, lineno);
+  close(fd);
+  return 0;
+}
 
+static int _shell_cat_stream(int fd, int outfd,
+               int show_nums, int num_nonblank, int *lineno)
+{
   char buf[BUFLEN];
   char line[BUFLEN];
   int nread;
@@ -554,9 +547,7 @@ static int _shell_cat_file(const char *path, int outfd,
 
         int is_blank = (pos == 1 && line[0] == '\n');
         if (show_nums || (num_nonblank && !is_blank)) {
-          char numbuf[32];
-          int len = sprintf(numbuf, "%6d  ", *lineno);
-          write(outfd, numbuf, len);
+          write_line_number(outfd, *lineno);
           (*lineno)++;
         }
         write(outfd, line, pos);
@@ -571,15 +562,89 @@ static int _shell_cat_file(const char *path, int outfd,
     line[pos] = '\0';
     int is_blank = (pos == 1 && line[0] == '\n');
     if (show_nums || (num_nonblank && !is_blank)) {
-      char numbuf[32];
-      int len = sprintf(numbuf, "%6d  ", *lineno);
-      write(outfd, numbuf, len);
+      write_line_number(outfd, *lineno);
       (*lineno)++;
     }
     write(outfd, line, pos);
   }
+  return 0;
+}
 
-  close(fd);
+static int write_line_number(int outfd, int n)
+{
+  char numbuf[16];
+  int pos = 0;
+  int x = n;
+  int i, pad;
+
+  if (x == 0) {
+    numbuf[pos++] = '0';
+  } else {
+    while (x > 0 && pos < (int)sizeof(numbuf)) {
+      numbuf[pos++] = '0' + (x % 10);
+      x /= 10;
+    }
+    for (i = 0; i < pos / 2; i++) {
+      char tmp = numbuf[i];
+      numbuf[i] = numbuf[pos - 1 - i];
+      numbuf[pos - 1 - i] = tmp;
+    }
+  }
+
+  pad = 6 - pos;
+  while (pad-- > 0)
+    write(outfd, " ", 1);
+  write(outfd, numbuf, pos);
+  write(outfd, "  ", 2);
+  return 0;
+}
+
+int shell_rot13(int argc, char **argv)
+{
+  return shell_rot13_fd(argc, argv, 0, 1);
+}
+
+int shell_rot13_fd(int argc, char **argv, int infd, int outfd)
+{
+  char buf[BUFLEN];
+  int i, fd, n, start = 1;
+
+  if (argc == 1) {
+    while ((n = read(infd, buf, sizeof(buf))) > 0) {
+      for (i = 0; i < n; i++) {
+        char c = buf[i];
+        if (c >= 'a' && c <= 'z')
+          buf[i] = (c - 'a' + 13) % 26 + 'a';
+        else if (c >= 'A' && c <= 'Z')
+          buf[i] = (c - 'A' + 13) % 26 + 'A';
+      }
+      write(outfd, buf, n);
+      if (n < sizeof(buf))
+        break;
+    }
+    return 0;
+  }
+
+  for (; start < argc; start++) {
+    fd = open(argv[start], O_RDONLY);
+    if (fd < 0) {
+      printf("rot13: %s: No such file or directory\n", argv[start]);
+      continue;
+    }
+    while ((n = read(fd, buf, sizeof(buf))) > 0) {
+      for (i = 0; i < n; i++) {
+        char c = buf[i];
+        if (c >= 'a' && c <= 'z')
+          buf[i] = (c - 'a' + 13) % 26 + 'a';
+        else if (c >= 'A' && c <= 'Z')
+          buf[i] = (c - 'A' + 13) % 26 + 'A';
+      }
+      write(outfd, buf, n);
+      if (n < sizeof(buf))
+        break;
+    }
+    close(fd);
+  }
   return 0;
 }
 
@@ -709,31 +774,218 @@ int cp_file(char* dest_filename, char* src_filename) {
     sys_mkdir(dest_filename);
     return 0;
   }
-  int fd = open(src_filename, O_RDONLY);
-  char buf[1000];
-  read(fd, buf, 1000);
-  close(fd);
-  fd = open(dest_filename, O_CREATE|O_RDWR);
-  write(fd, buf, strlen(buf));
-  close(fd);
+  int srcfd = open(src_filename, O_RDONLY);
+  int dstfd;
+  char buf[BUFLEN];
+  int n;
+  if (srcfd < 0) {
+    printf("cp: cannot open source %s\n", src_filename);
+    return -1;
+  }
+  unlink(dest_filename);
+  dstfd = open(dest_filename, O_CREATE|O_RDWR);
+  if (dstfd < 0) {
+    close(srcfd);
+    printf("cp: cannot open destination %s\n", dest_filename);
+    return -1;
+  }
+  while ((n = read(srcfd, buf, sizeof(buf))) > 0) {
+    if (write(dstfd, buf, n) != n) {
+      close(srcfd);
+      close(dstfd);
+      printf("cp: write failed for %s\n", dest_filename);
+      return -1;
+    }
+  }
+  close(srcfd);
+  close(dstfd);
+  return 0;
+}
+
+int shell_echo(int argc, char **argv)
+{
+  return shell_echo_fd(argc, argv, 1);
+}
+
+int shell_echo_fd(int argc, char **argv, int outfd)
+{
+  int i;
+  if (argc == 1) {
+    write(outfd, "\n", 1);
+    return 0;
+  }
+  for (i = 1; i < argc; i++) {
+    write(outfd, argv[i], strlen(argv[i]));
+    if (i != argc - 1)
+      write(outfd, " ", 1);
+  }
+  write(outfd, "\n", 1);
   return 0;
 }
 
 
 
 void shell_readline(char* buf) {
-  sys_readline(buf);
+  int i = 0;
+  int max_len = 1024;
+  char c;
+  printf(">");
+  while (i < max_len - 1) {
+    c = getchar();
+    if (c == EOF) {
+      continue;
+    }
+    if (c == '\b' || c == 127) {
+      if (i > 0) {
+        i--;
+        write(1, "\b \b", 3);
+      }
+      continue;
+    }
+    write(1, &c, 1);
+    if (c == '\n' || c == '\r') {
+      write(1, "\n", 1);
+      buf[i] = '\0';
+      break;
+    }
+    buf[i++] = c;
+  }
+  buf[i] = '\0';
+}
+
+struct ParsedCommand {
+  char *argv[MAXARGS];
+  int argc;
+  char *infile;
+  char *outfile;
+  int append;
+};
+
+static int parse_single_command(char *tokens[], int start, int end,
+                                struct ParsedCommand *cmd)
+{
+  int argc = 0;
+  cmd->infile = NULL;
+  cmd->outfile = NULL;
+  cmd->append = 0;
+
+  for (int i = start; i < end; i++) {
+    if (strcmp(tokens[i], "<") == 0) {
+      if (i + 1 < end)
+        cmd->infile = tokens[++i];
+      else
+        return -1;
+    } else if (strcmp(tokens[i], ">") == 0) {
+      if (i + 1 < end) {
+        cmd->outfile = tokens[++i];
+        cmd->append = 0;
+      } else {
+        return -1;
+      }
+    } else if (strcmp(tokens[i], ">>") == 0) {
+      if (i + 1 < end) {
+        cmd->outfile = tokens[++i];
+        cmd->append = 1;
+      } else {
+        return -1;
+      }
+    } else {
+      if (argc >= MAXARGS - 1)
+        return -1;
+      cmd->argv[argc++] = tokens[i];
+    }
+  }
+
+  cmd->argv[argc] = 0;
+  cmd->argc = argc;
+  return 0;
+}
+
+static int run_command_stage(struct ParsedCommand *cmd, int inherited_infd, int inherited_outfd)
+{
+  int infd = inherited_infd;
+  int outfd = inherited_outfd;
+  int close_infd = 0;
+  int close_outfd = 0;
+  int i;
+
+  if (cmd->argc == 0)
+    return 0;
+
+  if (cmd->infile) {
+    infd = open(cmd->infile, O_RDONLY);
+    if (infd < 0) {
+      printf("%s: cannot open input file %s\n", cmd->argv[0], cmd->infile);
+      return -1;
+    }
+    close_infd = 1;
+  }
+
+  if (cmd->outfile) {
+    if (!cmd->append)
+      unlink(cmd->outfile);
+    outfd = open(cmd->outfile, O_CREATE | O_RDWR);
+    if (outfd < 0) {
+      printf("%s: cannot open output file %s\n", cmd->argv[0], cmd->outfile);
+      if (close_infd)
+        close(infd);
+      return -1;
+    }
+    if (cmd->append) {
+      char tmp[BUFLEN];
+      while (read(outfd, tmp, sizeof(tmp)) > 0) {
+        ;
+      }
+    }
+    close_outfd = 1;
+  }
+
+  if (strcmp(cmd->argv[0], "cat") == 0) {
+    shell_cat_fd(cmd->argc, cmd->argv, infd, outfd);
+  } else if (strcmp(cmd->argv[0], "echo") == 0) {
+    shell_echo_fd(cmd->argc, cmd->argv, outfd);
+  } else if (strcmp(cmd->argv[0], "rot13") == 0) {
+    shell_rot13_fd(cmd->argc, cmd->argv, infd, outfd);
+  } else if (strcmp(cmd->argv[0], "spawn") == 0) {
+    if (cmd->argc < 2) {
+      printf("Usage: spawn <elf_id>\n");
+    } else {
+      int elf_id = str_to_int(cmd->argv[1]);
+      pid_t new_pid = spawn_io(elf_id, 1000, infd, outfd);
+      if (new_pid == -1)
+        printf("Failed to spawn process\n");
+      else
+        printf("Process spawned with PID %d\n", new_pid);
+    }
+  } else {
+    for (i = 0; i < NCOMMANDS; i++) {
+      if (strcmp(cmd->argv[0], commands[i].name) == 0) {
+        commands[i].func(cmd->argc, cmd->argv);
+        break;
+      }
+    }
+    if (i == NCOMMANDS) {
+      printf("Unknown command '%s'\n", cmd->argv[0]);
+      printf("try 'help' to see all supported commands.\n");
+    }
+  }
+
+  if (close_infd)
+    close(infd);
+  if (close_outfd)
+    close(outfd);
+  return 0;
 }
 
 static int
 runcmd (char *buf)
 {
-	int argc;
-	char *argv[MAXARGS];
-	int i;
-
-	argc = 0;
-	argv[argc] = 0;
+	int argc = 0;
+	char *tokens[MAXARGS];
+	struct ParsedCommand stages[MAXARGS];
+	int stage_count = 0;
+	int seg_start = 0;
+	int current_infd = 0;
 
 	while(1)
 	{
@@ -747,20 +999,61 @@ runcmd (char *buf)
 			printf("Too many arguments (max %d)\n", MAXARGS);
 			return 0;
 		}
-		argv[argc++] = buf;
+
+		tokens[argc++] = buf;
 		while (*buf && !strchr(WHITESPACE, *buf))
 			buf++;
 	}
-	argv[argc] = 0;
+	tokens[argc] = 0;
 	if (argc == 0)
 		return 0;
-	for (i = 0; i < NCOMMANDS; i++)
-	{
-		if (strcmp(argv[0], commands[i].name) == 0)
-			return commands[i].func(argc, argv);
+
+	for (int i = 0; i <= argc; i++) {
+		if (i == argc || strcmp(tokens[i], "|") == 0) {
+			if (i == seg_start) {
+				printf("Invalid null command in pipeline\n");
+				return 0;
+			}
+			if (stage_count >= MAXARGS - 1) {
+				printf("Too many pipeline stages\n");
+				return 0;
+			}
+			if (parse_single_command(tokens, seg_start, i, &stages[stage_count]) < 0) {
+				printf("Invalid redirection syntax\n");
+				return 0;
+			}
+			stage_count++;
+			seg_start = i + 1;
+		}
 	}
-	printf("Unknown command '%s'\n", argv[0]);
-        printf("try 'help' to see all supported commands.\n");
+
+	for (int i = 0; i < stage_count; i++) {
+		int pfd[2];
+		int outfd = 1;
+		int next_infd = 0;
+
+		if (i < stage_count - 1) {
+			if (pipe(pfd) < 0) {
+				printf("pipe: failed to create pipe\n");
+				if (current_infd != 0)
+					close(current_infd);
+				return 0;
+			}
+			next_infd = pfd[0];
+			outfd = pfd[1];
+		}
+
+		run_command_stage(&stages[i], current_infd, outfd);
+
+		if (outfd != 1)
+			close(outfd);
+		if (current_infd != 0)
+			close(current_infd);
+		current_infd = next_infd;
+	}
+
+	if (current_infd != 0)
+		close(current_infd);
 	return 0;
 
 
@@ -939,7 +1232,7 @@ int shell_spawn(int argc, char **argv)
 
     printf("Spawning process with elf_id %d...\n", elf_id);
 
-    pid_t new_pid = spawn(elf_id, 1000);
+    pid_t new_pid = spawn_io(elf_id, 1000, 0, 1);
     if (new_pid != -1) {
         printf("Process spawned with PID %d\n", new_pid);
     } else {

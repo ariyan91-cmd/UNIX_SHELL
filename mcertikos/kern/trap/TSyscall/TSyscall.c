@@ -150,11 +150,14 @@ void sys_spawn(tf_t *tf)
 {
   unsigned int new_pid;
   unsigned int elf_id, quota;
+  int infd, outfd;
   void *elf_addr;
   unsigned int qok, nc, curid;
 
   elf_id = syscall_get_arg2(tf);
   quota = syscall_get_arg3(tf);
+  infd = (int) syscall_get_arg4(tf);
+  outfd = (int) syscall_get_arg5(tf);
 
   qok = container_can_consume(curid, quota);
   nc = container_get_nchildren(curid);
@@ -197,6 +200,24 @@ void sys_spawn(tf_t *tf)
     syscall_set_errno(tf, E_INVAL_PID);
     syscall_set_retval1(tf, NUM_IDS);
   } else {
+    struct file *in_file = 0, *out_file = 0;
+    struct inode *cwd = 0;
+
+    if (infd >= 0 && infd < NOFILE)
+      in_file = tcb_get_openfiles(curid)[infd];
+    if (outfd >= 0 && outfd < NOFILE)
+      out_file = tcb_get_openfiles(curid)[outfd];
+
+    // Default to inherited console channels (fd 0/1 fallback in sys_read/write).
+    if ((infd == 0 || in_file != 0) && in_file != 0)
+      tcb_set_openfiles(new_pid, 0, file_dup(in_file));
+    if ((outfd == 1 || out_file != 0) && out_file != 0)
+      tcb_set_openfiles(new_pid, 1, file_dup(out_file));
+
+    cwd = tcb_get_cwd(curid);
+    if (cwd != 0)
+      tcb_set_cwd(new_pid, inode_dup(cwd));
+
     syscall_set_errno(tf, E_SUCC);
     syscall_set_retval1(tf, new_pid);
   }
@@ -228,27 +249,6 @@ void sys_is_dir(tf_t * tf){
   isDir = (type == T_DIR);
   syscall_set_errno(tf, E_SUCC);
   syscall_set_retval1(tf, isDir);
-}
-void sys_produce(tf_t *tf)
-{
-  unsigned int i;
-  for(i = 0; i < 5; i++) {
-    intr_local_disable();
-    KERN_DEBUG("CPU %d: Process %d: Produced %d\n", get_pcpu_idx(), get_curid(), i);
-    intr_local_enable();
-  }
-  syscall_set_errno(tf, E_SUCC);
-}
-
-void sys_consume(tf_t *tf)
-{
-  unsigned int i;
-  for(i = 0; i < 5; i++) {
-    intr_local_disable();
-    KERN_DEBUG("CPU %d: Process %d: Consumed %d\n", get_pcpu_idx(), get_curid(), i);
-    intr_local_enable();
-  }
-  syscall_set_errno(tf, E_SUCC);
 }
 void sys_ls(tf_t *tf)
 {
@@ -301,47 +301,89 @@ void sys_ls(tf_t *tf)
 }
 void sys_pwd(tf_t *tf)
 {
-    char arr[100][100];
-    int len = 0;
-    unsigned int poff;
-    struct inode* curi = (struct inode*)tcb_get_cwd(get_curid());
+    char names[64][DIRSIZ + 1];
+    char path[512];
+    int depth = 0;
+    int pid = get_curid();
+    struct inode* curi = (struct inode*)tcb_get_cwd(pid);
     struct inode* parent;
     struct dirent de;
-    unsigned int off;
+    unsigned int poff, off;
     unsigned int de_size = sizeof(struct dirent);
-    char* p = arr[len];
+    char *p = path;
 
-    // Lazily initialize cwd to root if not set
+    // Lazily initialize cwd to root if not set.
     if (curi == NULL) {
         curi = inode_get(ROOTDEV, ROOTINO);
-        tcb_set_cwd(get_curid(), curi);
+        tcb_set_cwd(pid, curi);
     }
+    curi = inode_dup(curi);  // local reference while walking
 
-    parent = dir_lookup(curi, "..", &poff);
+    while (depth < 64) {
+        int found = 0;
 
-    while (parent->inum != curi->inum) {
+        inode_lock(curi);
+        if (curi->type != T_DIR) {
+            inode_unlock(curi);
+            break;
+        }
+        parent = dir_lookup(curi, "..", &poff);
+        inode_unlock(curi);
+        if (parent == 0) {
+            break;
+        }
+
+        inode_lock(parent);
+        if (parent->type != T_DIR) {
+            inode_unlock(parent);
+            inode_put(parent);
+            break;
+        }
+
+        // Reached root when ".." points to itself.
+        if (parent->inum == curi->inum) {
+            inode_unlock(parent);
+            inode_put(parent);
+            break;
+        }
+
         for (off = 0; off < parent->size; off += de_size) {
             if (inode_read(parent, (char *)&de, off, de_size) != de_size)
                 break;
             if (de.inum == curi->inum) {
-                strncpy(arr[len], de.name, DIRSIZ);
-                arr[len][DIRSIZ] = 0;
-                len++;
+                strncpy(names[depth], de.name, DIRSIZ);
+                names[depth][DIRSIZ] = '\0';
+                depth++;
+                found = 1;
                 break;
             }
         }
+        inode_unlock(parent);
+        if (!found) {
+            inode_put(parent);
+            break;
+        }
+
+        inode_put(curi);
         curi = parent;
-        parent = dir_lookup(curi, "..", &poff);
+    }
+    inode_put(curi);
+
+    if (depth == 0) {
+        path[0] = '/';
+        path[1] = '\0';
+    } else {
+        for (int i = depth - 1; i >= 0; i--) {
+            *p++ = '/';
+            strncpy(p, names[i], DIRSIZ);
+            p += strnlen(names[i], DIRSIZ);
+        }
+        *p = '\0';
     }
 
-    int i;
-    for (i = len - 1; i >= 0; i--) {
-        p += strnlen(arr[i], sizeof(arr[i]));
-        *p++ = '/';
-    }
-    *p = '\0';
-
-    pt_copyout(arr[0], get_curid(), syscall_get_arg1(tf), p - arr[0] + 1);
+    pt_copyout(path, pid, syscall_get_arg2(tf), strnlen(path, sizeof(path)) + 1);
+    syscall_set_errno(tf, E_SUCC);
+    syscall_set_retval1(tf, 0);
 }
 
 
@@ -374,20 +416,6 @@ void sys_cp(tf_t *tf)
 {
 }
 
-void sys_readline(tf_t *tf)
-{
-  char* kernbuf = (char*)readline(">:");
-  char* userbuf = (char*)syscall_get_arg2(tf);
-  int n_len = strnlen(kernbuf, 1000) + 1;
-
-  if (pt_copyout((void*)kernbuf, get_curid(), userbuf, n_len) != n_len) {
-    KERN_PANIC("Readline fails!\n");
-    syscall_set_errno(tf, E_MEM);
-    syscall_set_retval1(tf, -1);
-  }
-  syscall_set_errno(tf, E_SUCC);
-  syscall_set_retval1(tf, 0);
-}
 void sys_touch(tf_t *tf)
 {
 }

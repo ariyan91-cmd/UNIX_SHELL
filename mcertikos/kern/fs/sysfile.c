@@ -10,6 +10,9 @@
 #include <kern/lib/syscall.h>
 #include <kern/trap/TSyscallArg/export.h>
 #include <kern/lib/spinlock.h>
+#include <kern/lib/pmap.h>
+#include <dev/console.h>
+#include "log.h"
 
 #include "dir.h"
 #include "path.h"
@@ -81,13 +84,27 @@ void sys_read(tf_t *tf)
     return ;
   }
   fp = tcb_get_openfiles(pid)[fd];
-  if(fp == 0 || fp->ip == 0){
-    KERN_INFO("fp illegal\n");
+  if(fp == 0 || fp->type == FD_NONE){
+    if (fd == 0) {
+      unsigned int i;
+      for (i = 0; i < n; i++) {
+        char c;
+        while ((c = cons_getc()) == 0) {
+          ;
+        }
+        kern_buf[i] = c;
+      }
+      pt_copyout(kern_buf, get_curid(), user_buf, n);
+      syscall_set_retval1(tf, n);
+      syscall_set_errno(tf, E_SUCC);
+      spinlock_release(&buf_lock);
+      return;
+    }
     syscall_set_retval1(tf, -1);
     syscall_set_errno(tf, E_BADF);
     spinlock_release(&buf_lock);
     return ;
-  } 
+  }
   size_read = file_read(fp, kern_buf, n);
   if(size_read > 0)
        pt_copyout(kern_buf, get_curid(), user_buf, size_read); 
@@ -132,12 +149,23 @@ void sys_write(tf_t *tf)
     return ;
   }
   fp = tcb_get_openfiles(pid)[fd];
-  if(fp == 0 || fp->ip == 0){
+  if(fp == 0){
+    if (fd == 1) {
+      unsigned int i;
+      pt_copyin(pid, user_buf, kern_buf, n);
+      for (i = 0; i < n; i++) {
+        cons_putc(kern_buf[i]);
+      }
+      syscall_set_retval1(tf, n);
+      syscall_set_errno(tf, E_SUCC);
+      spinlock_release(&buf_lock);
+      return;
+    }
     syscall_set_retval1(tf, -1);
     syscall_set_errno(tf, E_BADF);
     spinlock_release(&buf_lock);
     return ;
-  } 
+  }
   pt_copyin(pid, user_buf, kern_buf, n); 
   size_write = file_write(fp, kern_buf, n);
   syscall_set_retval1(tf, size_write);
@@ -569,5 +597,76 @@ void sys_chdir(tf_t *tf)
   inode_put(tcb_get_cwd(pid));
   tcb_set_cwd(pid, ip);
   syscall_set_errno(tf, E_SUCC);
+}
+
+void sys_pipe(tf_t *tf)
+{
+  int *pfd = (int*)syscall_get_arg2(tf);
+  struct file *rf, *wf;
+  struct pipe *p;
+  int fd0, fd1;
+  unsigned int pid = get_curid();
+  
+  p = pipe_alloc();
+  if(p == 0){
+    syscall_set_errno(tf, E_MEM);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  rf = file_alloc();
+  if(rf == 0){
+    syscall_set_errno(tf, E_MEM);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  wf = file_alloc();
+  if(wf == 0){
+    file_close(rf);
+    syscall_set_errno(tf, E_MEM);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  fd0 = fdalloc(rf);
+  if(fd0 < 0){
+    file_close(rf);
+    file_close(wf);
+    syscall_set_errno(tf, E_BADF);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  fd1 = fdalloc(wf);
+  if(fd1 < 0){
+    file_close(rf);
+    file_close(wf);
+    syscall_set_errno(tf, E_BADF);
+    syscall_set_retval1(tf, -1);
+    return;
+  }
+  
+  rf->type = FD_PIPE;
+  rf->readable = 1;
+  rf->writable = 0;
+  rf->pipe = p;
+  rf->ref = 1;
+  
+  wf->type = FD_PIPE;
+  wf->readable = 0;
+  wf->writable = 1;
+  wf->pipe = p;
+  wf->ref = 1;
+  
+  // Copy fd0 and fd1 to user space
+  int fds[2];
+  fds[0] = fd0;
+  fds[1] = fd1;
+  
+  pt_copyout(fds, pid, (uintptr_t)pfd, sizeof(fds));
+  
+  syscall_set_errno(tf, E_SUCC);
+  syscall_set_retval1(tf, 0);
 }
 
