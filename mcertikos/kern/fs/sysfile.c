@@ -11,6 +11,7 @@
 #include <kern/trap/TSyscallArg/export.h>
 #include <kern/lib/spinlock.h>
 #include <kern/lib/pmap.h>
+#include <dev/console.h>
 #include "log.h"
 
 #include "dir.h"
@@ -84,12 +85,26 @@ void sys_read(tf_t *tf)
   }
   fp = tcb_get_openfiles(pid)[fd];
   if(fp == 0 || fp->type == FD_NONE){
-    KERN_INFO("fp illegal\n");
+    if (fd == 0) {
+      unsigned int i;
+      for (i = 0; i < n; i++) {
+        char c;
+        while ((c = cons_getc()) == 0) {
+          ;
+        }
+        kern_buf[i] = c;
+      }
+      pt_copyout(kern_buf, get_curid(), user_buf, n);
+      syscall_set_retval1(tf, n);
+      syscall_set_errno(tf, E_SUCC);
+      spinlock_release(&buf_lock);
+      return;
+    }
     syscall_set_retval1(tf, -1);
     syscall_set_errno(tf, E_BADF);
     spinlock_release(&buf_lock);
     return ;
-  } 
+  }
   size_read = file_read(fp, kern_buf, n);
   if(size_read > 0)
        pt_copyout(kern_buf, get_curid(), user_buf, size_read); 
@@ -135,11 +150,22 @@ void sys_write(tf_t *tf)
   }
   fp = tcb_get_openfiles(pid)[fd];
   if(fp == 0){
+    if (fd == 1) {
+      unsigned int i;
+      pt_copyin(pid, user_buf, kern_buf, n);
+      for (i = 0; i < n; i++) {
+        cons_putc(kern_buf[i]);
+      }
+      syscall_set_retval1(tf, n);
+      syscall_set_errno(tf, E_SUCC);
+      spinlock_release(&buf_lock);
+      return;
+    }
     syscall_set_retval1(tf, -1);
     syscall_set_errno(tf, E_BADF);
     spinlock_release(&buf_lock);
     return ;
-  } 
+  }
   pt_copyin(pid, user_buf, kern_buf, n); 
   size_write = file_write(fp, kern_buf, n);
   syscall_set_retval1(tf, size_write);
@@ -643,5 +669,4 @@ void sys_pipe(tf_t *tf)
   syscall_set_errno(tf, E_SUCC);
   syscall_set_retval1(tf, 0);
 }
-
 

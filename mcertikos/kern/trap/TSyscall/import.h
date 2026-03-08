@@ -3,6 +3,9 @@
 
 #ifdef _KERN_
 
+struct file;
+struct inode;
+
 unsigned int get_curid(void);
 unsigned int syscall_get_arg1(tf_t *tf);
 unsigned int syscall_get_arg2(tf_t *tf);
@@ -22,6 +25,12 @@ unsigned int container_can_consume(unsigned int curid, unsigned int quota);
 unsigned int container_get_nchildren(unsigned int curid);
 unsigned int proc_create(void *elf_addr, unsigned int);
 void thread_yield(void);
+struct file* file_dup(struct file *f);
+struct inode* inode_dup(struct inode *ip);
+struct file** tcb_get_openfiles(unsigned int pid);
+void tcb_set_openfiles(unsigned int pid, int fd, struct file* f);
+struct inode* tcb_get_cwd(unsigned int pid);
+void tcb_set_cwd(unsigned int pid, struct inode* d);
 
 #endif /* _KERN_ */
 
