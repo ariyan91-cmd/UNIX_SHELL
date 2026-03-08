@@ -317,15 +317,32 @@ void sys_pwd(tf_t *tf)
         curi = inode_get(ROOTDEV, ROOTINO);
         tcb_set_cwd(pid, curi);
     }
+    curi = inode_dup(curi);  // local reference while walking
 
     while (depth < 64) {
+        int found = 0;
+
+        inode_lock(curi);
+        if (curi->type != T_DIR) {
+            inode_unlock(curi);
+            break;
+        }
         parent = dir_lookup(curi, "..", &poff);
+        inode_unlock(curi);
         if (parent == 0) {
+            break;
+        }
+
+        inode_lock(parent);
+        if (parent->type != T_DIR) {
+            inode_unlock(parent);
+            inode_put(parent);
             break;
         }
 
         // Reached root when ".." points to itself.
         if (parent->inum == curi->inum) {
+            inode_unlock(parent);
             inode_put(parent);
             break;
         }
@@ -337,12 +354,20 @@ void sys_pwd(tf_t *tf)
                 strncpy(names[depth], de.name, DIRSIZ);
                 names[depth][DIRSIZ] = '\0';
                 depth++;
+                found = 1;
                 break;
             }
         }
+        inode_unlock(parent);
+        if (!found) {
+            inode_put(parent);
+            break;
+        }
 
+        inode_put(curi);
         curi = parent;
     }
+    inode_put(curi);
 
     if (depth == 0) {
         path[0] = '/';
