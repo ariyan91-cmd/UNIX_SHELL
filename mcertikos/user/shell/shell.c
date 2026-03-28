@@ -152,7 +152,7 @@ int shell_ls(int argc, char** argv)
 int shell_pwd(int argc, char ** argv)
 {
 	if (argc != 1) {
-		printf("pwd: too many arguments\n");
+		printf("pwd: too many arguments\n");S
 		return 0;
 	}
 	sys_pwd(shell_buf);
@@ -164,7 +164,7 @@ int shell_cd(int argc, char** argv)
 {
 	char path[1024];
 	if (argc == 1){
-		strcpy(path, "/");
+		strcpy(path, "/");S
 		if (sys_chdir(path) < 0)
 			printf("cd: cannot change directory\n");
 	}
@@ -349,8 +349,10 @@ int shell_rm(int argc, char** argv)
         }
         return 0;
 }
+
 // path is guaranteed to be exist
 // DFS, postorder traversal
+
 int _shell_rm(char *path, int isRecursive){
   int errno, len, i;
   char * sub_path;
