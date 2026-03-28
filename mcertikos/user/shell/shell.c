@@ -152,19 +152,19 @@ int shell_ls(int argc, char** argv)
 int shell_pwd(int argc, char ** argv)
 {
 	if (argc != 1) {
-		printf("pwd: too many arguments\n");S
+		printf("pwd: too many arguments\n");
 		return 0;
 	}
 	sys_pwd(shell_buf);
-        printf("%s\n",shell_buf);
+    printf("%s\n",shell_buf);
 	return 0;
 }
 
 int shell_cd(int argc, char** argv)
 {
 	char path[1024];
-	if (argc == 1){
-		strcpy(path, "/");S
+	if(argc == 1){
+		strcpy(path, "/");
 		if (sys_chdir(path) < 0)
 			printf("cd: cannot change directory\n");
 	}
