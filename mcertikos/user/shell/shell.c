@@ -1,4 +1,4 @@
-   #include <proc.h>
+#include <proc.h>
 #include <stdio.h>
 #include <syscall.h>
 #include <x86.h>
@@ -1087,7 +1087,7 @@ int main (int argc, char** argv)
         int mode = 0;
 	char buf[1024];
 	printf("\n********Welcome to unix shell*********\n");
-        printf("********This is the final project for CSE4501 Operating Systems in Yale********\n");
+        printf("********This is the final project for CSE4501 Operating Systems in IUT********\n");
         printf("********Author: Khandaker Ali Ariyan********\n");
         printf("********Date: 26/03/2016 ********\n");
 	//close(open("usertests.ran", O_CREATE));  // Disabled - requires proper cwd init
