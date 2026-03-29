@@ -1086,10 +1086,10 @@ int main (int argc, char** argv)
         // 0: normal mode
         int mode = 0;
 	char buf[1024];
-	printf("\n********Welcome to left-mid-right shell*********\n");
-        printf("********This is the final project for CPSC 422/522 Operating Systems in Yale********\n");
-        printf("********Author: Bo Song, Haoliang Zhang********\n");
-        printf("********Date: 12/18/2015 ********\n");
+	printf("\n********Welcome to unix shell*********\n");
+        printf("********This is the final project for CSE4501 Operating Systems in Yale********\n");
+        printf("********Author: Khandaker Ali Ariyan********\n");
+        printf("********Date: 26/03/2016 ********\n");
 	//close(open("usertests.ran", O_CREATE));  // Disabled - requires proper cwd init
 
 
