@@ -573,6 +573,7 @@ void sys_mkdir(tf_t *tf)
 
     syscall_set_errno(tf, E_SUCC);
 }
+
 void sys_chdir(tf_t *tf)
 {
   char path[128];

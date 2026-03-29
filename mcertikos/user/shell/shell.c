@@ -1,4 +1,4 @@
-   #include <proc.h>
+#include <proc.h>
 #include <stdio.h>
 #include <syscall.h>
 #include <x86.h>
@@ -156,14 +156,14 @@ int shell_pwd(int argc, char ** argv)
 		return 0;
 	}
 	sys_pwd(shell_buf);
-        printf("%s\n",shell_buf);
+    printf("%s\n",shell_buf);
 	return 0;
 }
 
 int shell_cd(int argc, char** argv)
 {
 	char path[1024];
-	if (argc == 1){
+	if(argc == 1){
 		strcpy(path, "/");
 		if (sys_chdir(path) < 0)
 			printf("cd: cannot change directory\n");
@@ -349,8 +349,10 @@ int shell_rm(int argc, char** argv)
         }
         return 0;
 }
+
 // path is guaranteed to be exist
 // DFS, postorder traversal
+
 int _shell_rm(char *path, int isRecursive){
   int errno, len, i;
   char * sub_path;
@@ -1084,10 +1086,10 @@ int main (int argc, char** argv)
         // 0: normal mode
         int mode = 0;
 	char buf[1024];
-	printf("\n********Welcome to left-mid-right shell*********\n");
-        printf("********This is the final project for CPSC 422/522 Operating Systems in Yale********\n");
-        printf("********Author: Bo Song, Haoliang Zhang********\n");
-        printf("********Date: 12/18/2015 ********\n");
+	printf("\n********Welcome to unix shell*********\n");
+        printf("********This is the final project for CSE4501 Operating Systems in IUT********\n");
+        printf("********Author: Khandaker Ali Ariyan********\n");
+        printf("********Date: 26/03/2016 ********\n");
 	//close(open("usertests.ran", O_CREATE));  // Disabled - requires proper cwd init
 
 

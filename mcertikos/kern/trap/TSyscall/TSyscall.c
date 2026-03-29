@@ -250,6 +250,7 @@ void sys_is_dir(tf_t * tf){
   syscall_set_errno(tf, E_SUCC);
   syscall_set_retval1(tf, isDir);
 }
+
 void sys_ls(tf_t *tf)
 {
   uint32_t off, inum;
@@ -299,6 +300,7 @@ void sys_ls(tf_t *tf)
   syscall_set_errno(tf, E_SUCC);
   syscall_set_retval1(tf, len);
 }
+
 void sys_pwd(tf_t *tf)
 {
     char names[64][DIRSIZ + 1];
@@ -321,7 +323,6 @@ void sys_pwd(tf_t *tf)
 
     while (depth < 64) {
         int found = 0;
-
         inode_lock(curi);
         if (curi->type != T_DIR) {
             inode_unlock(curi);
@@ -332,21 +333,18 @@ void sys_pwd(tf_t *tf)
         if (parent == 0) {
             break;
         }
-
         inode_lock(parent);
         if (parent->type != T_DIR) {
             inode_unlock(parent);
             inode_put(parent);
             break;
         }
-
         // Reached root when ".." points to itself.
         if (parent->inum == curi->inum) {
             inode_unlock(parent);
             inode_put(parent);
             break;
         }
-
         for (off = 0; off < parent->size; off += de_size) {
             if (inode_read(parent, (char *)&de, off, de_size) != de_size)
                 break;
@@ -363,12 +361,10 @@ void sys_pwd(tf_t *tf)
             inode_put(parent);
             break;
         }
-
         inode_put(curi);
         curi = parent;
     }
     inode_put(curi);
-
     if (depth == 0) {
         path[0] = '/';
         path[1] = '\0';
@@ -380,7 +376,6 @@ void sys_pwd(tf_t *tf)
         }
         *p = '\0';
     }
-
     pt_copyout(path, pid, syscall_get_arg2(tf), strnlen(path, sizeof(path)) + 1);
     syscall_set_errno(tf, E_SUCC);
     syscall_set_retval1(tf, 0);
